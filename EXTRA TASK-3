@@ -1,0 +1,146 @@
+Explanation of the Code:
+Paths to Content and Style Images:
+
+content_path = '/content/pexels-pixabay-56866.jpg': The content image path is provided.
+style_path = 'path_to_style_image.jpg': Replace with the path to the style image you wish to use (e.g., a famous painting).
+Load and Preprocess Images:
+
+The load_image() function loads and preprocesses both the content and style images to be compatible with VGG19.
+Model Setup:
+
+The VGG19 model is used, which extracts features from specific layers. The content and style loss are computed based on the extracted features.
+Loss Calculation:
+
+Content loss, style loss, and total variation loss are calculated to guide the optimization process.
+Optimization:
+
+Adam optimizer is used to iteratively adjust the generated image to minimize the total loss.
+Final Image:
+
+After the optimization, the final image is displayed as the content image with the style of the style image applied.
+Expected Output:
+Styled Image: The program will generate a new image that contains the content of the original image (pexels-pixabay-56866.jpg) but with the artistic style applied from the provided style image (replace 'path_to_style_image.jpg' with the correct style image path).
+Console Output: It will display the loss values during the iterations to track the optimization process.
+
+
+import tensorflow as tf
+import numpy as np
+import matplotlib.pyplot as plt
+import cv2
+from tensorflow.keras.preprocessing import image
+from tensorflow.keras import models
+
+# Load the content and style images
+def load_image(img_path, target_size=(512, 512)):
+    img = image.load_img(img_path, target_size=target_size)
+    img = image.img_to_array(img)
+    img = np.expand_dims(img, axis=0)
+    img = tf.keras.applications.vgg19.preprocess_input(img)
+    return img
+
+# Function to de-process the image (reverse the preprocessing)
+def deprocess_image(x):
+    x = x.squeeze()
+    x = x[::-1]  # Reverse the VGG19 preprocessing step
+    x = np.clip(x, 0, 255).astype('uint8')
+    return x
+
+# Load VGG19 model pre-trained on ImageNet
+vgg = tf.keras.applications.VGG19(include_top=False, weights='imagenet')
+
+# List of layers for content and style
+content_layers = ['block5_conv2']  # Layer to extract content
+style_layers = [
+    'block1_conv1', 'block2_conv1', 'block3_conv1', 'block4_conv1', 'block5_conv1'
+]
+
+# Get the output for content and style layers
+def get_model():
+    model = models.Model([vgg.input], [vgg.get_layer(name).output for name in (style_layers + content_layers)])
+    return model
+
+# Get features for the images
+def get_features(model, content_image, style_image):
+    content_outputs = model(content_image)
+    style_outputs = model(style_image)
+    
+    # Extract content and style features
+    content_features = content_outputs[-1]
+    style_features = style_outputs[:-1]
+    
+    return content_features, style_features
+
+# Compute the content loss (mean squared error)
+def content_loss(content, generated):
+    return tf.reduce_mean(tf.square(content - generated))
+
+# Compute the style loss (sum of squared differences)
+def style_loss(style, generated):
+    gram_style = gram_matrix(style)
+    gram_generated = gram_matrix(generated)
+    return tf.reduce_mean(tf.square(gram_style - gram_generated))
+
+# Gram matrix function for style loss
+def gram_matrix(x):
+    channels = int(x.shape[-1])
+    a = tf.reshape(x, [-1, channels])
+    gram = tf.matmul(a, a, transpose_a=True)
+    return gram
+
+# Total variation loss for regularization
+def total_variation_loss(x):
+    return tf.reduce_mean(tf.image.total_variation(x))
+
+# Define the model and the loss function
+def compute_loss(model, content_image, style_image, generated_image):
+    content_features, style_features = get_features(model, content_image, style_image)
+    generated_features = get_features(model, generated_image, style_image)[0]
+    
+    c_loss = content_loss(content_features, generated_features)
+    s_loss = 0
+    for style_f, gen_f in zip(style_features, generated_features):
+        s_loss += style_loss(style_f, gen_f)
+    
+    t_loss = total_variation_loss(generated_image)
+    
+    total_loss = 10 * c_loss + 100 * s_loss + 1e-4 * t_loss  # Weighted sum
+    return total_loss, c_loss, s_loss, t_loss
+
+# Gradient descent to minimize the loss
+def optimize_image(model, content_image, style_image, generated_image, optimizer, num_iterations=100):
+    for i in range(num_iterations):
+        with tf.GradientTape() as tape:
+            tape.watch(generated_image)
+            total_loss, c_loss, s_loss, t_loss = compute_loss(model, content_image, style_image, generated_image)
+        
+        grads = tape.gradient(total_loss, generated_image)
+        optimizer.apply_gradients([(grads, generated_image)])
+        
+        if i % 10 == 0:
+            print(f"Iteration {i}: Total Loss={total_loss.numpy()}, Content Loss={c_loss.numpy()}, Style Loss={s_loss.numpy()}, Total Variation Loss={t_loss.numpy()}")
+    
+    return generated_image
+
+# Define the paths for content and style images
+content_path = '/content/pexels-pixabay-56866.jpg'  # Replace with your content image path
+style_path = '/content/style_image.jpg'             # Replace with your style image path
+
+# Load images
+content_image = load_image(content_path)
+style_image = load_image(style_path)
+
+# Set up the generated image (start with the content image)
+generated_image = tf.Variable(content_image)
+
+# Set up the optimizer
+optimizer = tf.optimizers.Adam(learning_rate=0.01)
+
+# Run the style transfer
+model = get_model()
+styled_image = optimize_image(model, content_image, style_image, generated_image, optimizer)
+
+# De-process and display the output
+final_image = deprocess_image(styled_image.numpy())
+plt.imshow(final_image)
+plt.axis('off')
+plt.show()
